@@ -1,0 +1,77 @@
+The scanner API exists of 2 components:
+1. Get ScanId 
+1. Get Scanresults
+
+In SQL you first create the table [log_pbi_tables]. In this table we store the JSON result into a single column. 
+There is a limit on the amount of text within a single column. In this case we iterate through each workspace and fetch the related scan id.
+
+This procedure will insert the JSON result into a single column (log) within [prd].[log_pbi_tables]
+---------------------------------------------
+CREATE PROCEDURE [dbo].[spUpsertPBILogs]
+
+@logs nvarchar(max)
+
+AS
+
+BEGIN
+
+INSERT INTO [prd].[log_pbi_tables] (log) values(@logs)
+
+END
+GO
+----------------------------------------------
+
+This procedure wil disect the JSON result into useful fields and insert into prd.dim_pbi_tables
+--------------------------------------------------------
+CREATE PROCEDURE [dbo].[InsertPBILog] AS
+
+DECLARE @json NVARCHAR(MAX)
+SET @json =(select [log] from [prd].[log_pbi_tables] );
+
+INSERT INTO prd.dim_pbi_tables
+SELECT 
+   Workspaces.id				AS Workspace_id
+  ,Datasets.id					AS Dataset_id
+  ,Tables.name					AS Table_name	
+  ,TableExpression.expression	AS Table_source
+  ,Columns.name					AS Column_name
+FROM OPENJSON(@json, '$.workspaces')
+WITH
+(
+   id uniqueidentifier,
+   name nvarchar(max),
+   state nvarchar(max),
+   datasets nvarchar(max) AS JSON        
+)
+AS Workspaces
+CROSS apply openjson (Workspaces.datasets)
+WITH
+(
+   id       VARCHAR(30),
+   name nvarchar(max),
+   configuredBy  nvarchar(max),
+   tables nvarchar(max) AS JSON
+)
+AS Datasets
+CROSS apply openjson (Datasets.tables)
+WITH
+(
+   name nvarchar(max),
+   columns nvarchar(max) AS JSON,
+   source nvarchar(max) AS JSON
+)
+AS Tables
+CROSS apply openjson (Tables.columns)
+WITH
+(
+   name nvarchar(max)
+)
+AS columns
+CROSS apply openjson (Tables.source)
+WITH
+(
+   expression nvarchar(max)
+)
+AS TableExpression
+WHERE Workspaces.state = 'Active'
+
